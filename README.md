@@ -1,4 +1,4 @@
-# Baru Validator - QGIS Plugin for ML Model Validation
+# Baru Validator - QGIS Plugin for ML Model Validation ✔️
 
 A comprehensive QGIS plugin for validating machine learning models used in Baru detection across satellite imagery. The plugin compares classified raster/vector data against validation datasets and provides advanced accuracy metrics.
 
@@ -24,7 +24,7 @@ The plugin calculates the following advanced metrics:
 7. **User's Accuracy**: Precision per class (reliability of classification)
 8. **Confusion Matrix**: Detailed error matrix with per-class metrics
 
-
+📽️See below how Baru woks📽️
 
 
 https://github.com/user-attachments/assets/a799fb2c-0135-4e07-969d-01d0097b98b3
