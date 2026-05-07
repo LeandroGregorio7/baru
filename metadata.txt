@@ -1,0 +1,39 @@
+# -*- coding: utf-8 -*-
+# Baru Validator - ML Model Validation Plugin
+# QGIS plugin for validating machine learning models for Baru detection using satellite imagery
+#
+# Copyright (C) 2025 Manus AI
+#
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program. If not, see <https://www.gnu.org/licenses/>.
+
+[general]
+name=Baru Validator
+qgisMinimumVersion=3.0.0
+description=QGIS plugin for validating machine learning models for Baru detection. Supports raster and vector classification inputs, calculates Kappa, QADI, F1-Score, MCC, and other advanced metrics for model quality assessment.
+version=1.1.0
+author= Leandro da Silva Gregorio
+email= leandrogeosmart@gmail.com
+about=Baru Validator is a comprehensive QGIS plugin designed for validating machine learning models used in Baru detection across satellite imagery (Sentinel 10m, Sentinel 1m, Google Earth). The plugin compares classified raster/vector data against validation datasets (points or polygons) and provides advanced accuracy metrics including Cohen's Kappa, QADI index, F1-Score, Matthews Correlation Coefficient (MCC), Producer's Accuracy, User's Accuracy, and confusion matrices. Ideal for assessing model generalization when replicating trained models across different geographic areas without collecting new training samples.
+tracker=https://github.com/LeandroGregorio7/baru/issues
+repository=https://github.com/LeandroGregorio7/baru
+homepage=https://github.com/LeandroGregorio7/baru
+license=GPL-3
+license_file=LICENSE
+hasProcessingProvider=no
+tags=qgis,baru,machine learning,model validation,remote sensing,satellite imagery,accuracy assessment,kappa,F1-score,confusion matrix
+category=Raster
+icon=icons/baru_icon.png
+experimental=False
+deprecated=False
+server=False
