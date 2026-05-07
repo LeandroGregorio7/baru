@@ -24,6 +24,13 @@ The plugin calculates the following advanced metrics:
 7. **User's Accuracy**: Precision per class (reliability of classification)
 8. **Confusion Matrix**: Detailed error matrix with per-class metrics
 
+
+
+
+https://github.com/user-attachments/assets/a799fb2c-0135-4e07-969d-01d0097b98b3
+
+
+
 ### Report Generation
 
 Generate validation reports in multiple formats:
