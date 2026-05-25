@@ -1,12 +1,13 @@
 # -*- coding: utf-8 -*-
 """
-Report Generator Module - V12 (Final Decision Version)
-Includes Model Ranking, Automated Conclusion, and Interactive Class Filtering.
+Report Generator Module
+Generate individual validation reports and the Master Dashboard V10
 """
 
 import os
 import re
 import json
+import csv
 from datetime import datetime
 import pandas as pd
 import numpy as np
@@ -31,13 +32,17 @@ class ReportGenerator:
         except Exception:
             return 0.0
 
-    def generate(self, file_path, results):
-        if not file_path.lower().endswith(('.html', '.htm')):
-            file_path = str(file_path) + ".html"
-        self._generate_html(file_path, results)
+    def generate(self, file_path, results, format_type='html', include_confusion=True, include_charts=False):
+        """Generate individual validation report"""
+        format_type = format_type.lower()
+        if format_type == 'pdf' or format_type == 'html':
+            if not file_path.lower().endswith(('.html', '.htm')):
+                file_path = str(file_path) + ".html"
+            self._generate_html(file_path, results, include_confusion)
 
-    def _generate_html(self, file_path, results):
-        """Builds the Individual Report with JSON metadata"""
+    def _generate_html(self, file_path, results, include_confusion=True):
+        """Builds the Individual Report (Enhanced & Professional) with JSON metadata"""
+        
         metrics_dict = {
             "oa": self._safe_float(results.get('overall_accuracy', 0)),
             "kappa": self._safe_float(results.get('kappa', 0)),
@@ -51,11 +56,114 @@ class ReportGenerator:
                 "pa": self._safe_float(results['producer_accuracy'].get(cls, 0)),
                 "ua": self._safe_float(results['user_accuracy'].get(cls, 0))
             }
+        
         json_data = json.dumps(metrics_dict)
-        with open(file_path, 'w', encoding='utf-8') as f:
-            f.write(f"<html><body><script id='metrics-data' type='application/json'>{json_data}</script>Relatório Individual Gerado</body></html>")
+        
+        cm_html = ""
+        if include_confusion and 'confusion_matrix' in results:
+            cm = results['confusion_matrix']
+            cm_html += '<table class="confusion-matrix"><thead><tr><th>Referência \\ Classificado</th>'
+            for col in cm.columns: 
+                label = f"Baru ({col})" if str(col) == "1" else f"Outros ({col})"
+                cm_html += f"<th>{label}</th>"
+            cm_html += "</tr></thead><tbody>"
+            for row in cm.index:
+                label_row = f"Baru ({row})" if str(row) == "1" else f"Outros ({row})"
+                cm_html += f"<tr><td><strong>{label_row}</strong></td>"
+                for col in cm.columns:
+                    cls_css = " class='diagonal'" if row == col else ""
+                    cm_html += f"<td{cls_css}>{cm.loc[row, col]}</td>"
+                cm_html += "</tr>"
+            cm_html += "</tbody></table>"
 
-    # =====================================================================
+        html_parts = []
+        html_parts.append("<!DOCTYPE html>")
+        html_parts.append("<html lang='pt-br'>")
+        html_parts.append("<head>")
+        html_parts.append("    <meta charset='UTF-8'>")
+        html_parts.append("    <title>Baru Validator - Relatório Individual</title>")
+        html_parts.append("    <style>")
+        html_parts.append("        :root { --primary: #1f4788; --secondary: #2c3e50; --bg: #f4f7f6; --baru: #a4161a; }")
+        html_parts.append("        body { font-family: 'Segoe UI', Tahoma, sans-serif; background: var(--bg); color: #333; padding: 40px; margin: 0; }")
+        html_parts.append("        .container { max-width: 900px; margin: auto; background: white; padding: 40px; border-radius: 8px; box-shadow: 0 4px 15px rgba(0,0,0,0.1); }")
+        html_parts.append("        h1 { color: var(--primary); text-align: center; border-bottom: 3px solid var(--primary); padding-bottom: 15px; margin-top: 0; }")
+        html_parts.append("        h2 { color: var(--secondary); margin-top: 35px; border-bottom: 2px solid #eee; padding-bottom: 8px; font-size: 1.3em; }")
+        html_parts.append("        table { width: 100%; border-collapse: collapse; margin-top: 15px; box-shadow: 0 1px 3px rgba(0,0,0,0.05); font-size: 15px; }")
+        html_parts.append("        th, td { border: 1px solid #ddd; padding: 12px; text-align: center; }")
+        html_parts.append("        th { background-color: var(--primary); color: white; text-transform: uppercase; font-size: 13px; letter-spacing: 0.5px; }")
+        html_parts.append("        .diagonal { background-color: #d4edda; font-weight: bold; color: #155724; }")
+        html_parts.append("        .highlight { color: var(--baru); font-weight: bold; }")
+        html_parts.append("        .footer { text-align: center; margin-top: 40px; font-size: 12px; color: #888; border-top: 1px solid #eee; padding-top: 20px; }")
+        html_parts.append("    </style>")
+        html_parts.append("</head>")
+        html_parts.append("<body>")
+        html_parts.append(f"    <script id='metrics-data' type='application/json'>{json_data}</script>")
+        html_parts.append("    <div class='container'>")
+        html_parts.append("        <h1>Relatório de Validação Analítica - OBIA</h1>")
+        html_parts.append(f"        <p style='text-align:center; color:#666; font-style: italic;'>Processado em: {self.timestamp}</p>")
+        html_parts.append("        <h2>1. Métricas Globais (Desempenho Geral do Modelo)</h2>")
+        html_parts.append("        <table>")
+        html_parts.append("            <thead><tr><th>Overall Accuracy (OA)</th><th>Índice Kappa</th><th>QADI</th><th>MCC</th></tr></thead>")
+        html_parts.append("            <tbody><tr>")
+        html_parts.append(f"                <td style='font-weight:bold; font-size:1.1em;'>{metrics_dict['oa']:.4f}</td>")
+        html_parts.append(f"                <td>{metrics_dict['kappa']:.4f}</td>")
+        html_parts.append(f"                <td>{metrics_dict['qadi']:.4f}</td>")
+        html_parts.append(f"                <td>{metrics_dict['mcc']:.4f}</td>")
+        html_parts.append("            </tr></tbody>")
+        html_parts.append("        </table>")
+        html_parts.append("        <h2>2. Desempenho Específico por Classe</h2>")
+        html_parts.append("        <table>")
+        html_parts.append("            <thead><tr><th>Classe</th><th>F1-Score</th><th>Recall (Produtor)</th><th>Precision (Usuário)</th></tr></thead>")
+        html_parts.append("            <tbody>")
+        
+        for cls in sorted(results.get('f1_scores', {}).keys()):
+            f1 = self._safe_float(results['f1_scores'].get(cls, 0))
+            pa = self._safe_float(results['producer_accuracy'].get(cls, 0))
+            ua = self._safe_float(results['user_accuracy'].get(cls, 0))
+            
+            if str(cls) == "1":
+                label = "<span class='highlight'>Baru (1)</span>"
+                row_style = "style='background-color: #fff8f8;'"
+            else:
+                label = f"Outros ({cls})"
+                row_style = ""
+                
+            html_parts.append(f"            <tr {row_style}><td>{label}</td><td style='font-weight:bold;'>{f1:.4f}</td><td>{pa:.4f}</td><td>{ua:.4f}</td></tr>")
+            
+        html_parts.append("            </tbody>")
+        html_parts.append("        </table>")
+        
+        if cm_html:
+            html_parts.append("        <h2>3. Matriz de Confusão Espacial</h2>")
+            html_parts.append(f"        {cm_html}")
+            
+        html_parts.append("        <div class='footer'>")
+        html_parts.append("            Gerado pelo Plugin Baru Validator - Inteligência Cartográfica para QGIS")
+        html_parts.append("        </div>")
+        html_parts.append("    </div>")
+        html_parts.append("</body>")
+        html_parts.append("</html>")
+        
+        with open(file_path, 'w', encoding='utf-8') as f:
+            f.write("\n".join(html_parts))
+
+    def export_csv(self, file_path, results):
+        """Export results to CSV"""
+        if not file_path.lower().endswith('.csv'):
+            file_path = str(file_path) + ".csv"
+        with open(file_path, 'w', newline='', encoding='utf-8') as f:
+            writer = csv.writer(f)
+            writer.writerow(['Metrica', 'Valor'])
+            writer.writerow(['Overall Accuracy', results.get('overall_accuracy', 0)])
+            writer.writerow(['Kappa', results.get('kappa', 0)])
+            writer.writerow(['QADI', results.get('qadi', 0)])
+            writer.writerow(['MCC', results.get('mcc', 0)])
+            writer.writerow([])
+            writer.writerow(['Classe', 'F1-Score', 'Producer Accuracy', 'User Accuracy'])
+            for cls in sorted(results.get('f1_scores', {}).keys()):
+                writer.writerow([cls, results['f1_scores'].get(cls, 0), results['producer_accuracy'].get(cls, 0), results['user_accuracy'].get(cls, 0)])
+
+ # =====================================================================
     # MÓDULO CONSOLIDADOR (Dashboard Master V12)
     # =====================================================================
     def generate_master_dashboard(self, file_path, models_data):
@@ -277,4 +385,3 @@ class ReportGenerator:
         window.onload = updateDashboard;
         </script></body></html>""")
         return "".join(html_parts)
-
