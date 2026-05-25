@@ -21,13 +21,13 @@
 name=Baru Validator
 qgisMinimumVersion=3.0.0
 description=QGIS plugin for validating machine learning models for Baru detection. Supports raster and vector classification inputs, calculates Kappa, QADI, F1-Score, MCC, and other advanced metrics for model quality assessment.
-version=1.1.0
+version=1.2.0
 author= Leandro da Silva Gregorio
 email= leandrogeosmart@gmail.com
 about=Baru Validator is a comprehensive QGIS plugin designed for validating machine learning models used in Baru detection across satellite imagery (Sentinel 10m, Sentinel 1m, Google Earth). The plugin compares classified raster/vector data against validation datasets (points or polygons) and provides advanced accuracy metrics including Cohen's Kappa, QADI index, F1-Score, Matthews Correlation Coefficient (MCC), Producer's Accuracy, User's Accuracy, and confusion matrices. Ideal for assessing model generalization when replicating trained models across different geographic areas without collecting new training samples.
-tracker=https://github.com/LeandroGregorio7/baru/issues
-repository=https://github.com/LeandroGregorio7/baru
-homepage=https://github.com/LeandroGregorio7/baru
+tracker=https://github.com/manus-ai/baru-validator/issues
+repository=https://github.com/manus-ai/baru-validator
+homepage=https://github.com/manus-ai/baru-validator
 license=GPL-3
 license_file=LICENSE
 hasProcessingProvider=no

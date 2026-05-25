@@ -1,51 +1,37 @@
 # -*- coding: utf-8 -*-
 """
 Baru Validator - QGIS Plugin for ML Model Validation
-Main plugin class with validation metrics and UI
+Main plugin class with validation metrics, UI and Master Dashboard
 """
 
 import os
-import sys
-import tempfile
-import subprocess
+import traceback
+import numpy as np
+import pandas as pd
 from datetime import datetime
 from pathlib import Path
 
-from PyQt5.QtCore import QSettings, QTranslator, QCoreApplication, Qt, QTimer
+from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QIcon, QColor
 from PyQt5.QtWidgets import (
     QAction, QFileDialog, QMessageBox, QDialog, QVBoxLayout, QHBoxLayout,
-    QLabel, QDoubleSpinBox, QPushButton, QSpinBox, QGroupBox, QCheckBox,
+    QLabel, QPushButton, QGroupBox, QCheckBox,
     QTabWidget, QWidget, QTextEdit, QComboBox, QTableWidget, QTableWidgetItem,
-    QProgressBar, QScrollArea, QApplication
+    QHeaderView, QAbstractItemView, QInputDialog
 )
 
 from qgis.core import (
     QgsRasterLayer, QgsVectorLayer, QgsProject, QgsFeature, QgsGeometry,
     QgsField, QgsMessageLog, Qgis, QgsMapLayer, QgsWkbTypes, QgsApplication,
-    QgsRectangle, QgsPointXY, QgsCoordinateReferenceSystem, QgsCoordinateTransform,
-    QgsMapLayerProxyModel, QgsRaster
+    QgsCoordinateReferenceSystem, QgsCoordinateTransform, QgsMapLayerProxyModel,
+    QgsSpatialIndex
 )
-from qgis.gui import QgsMapCanvas, QgsMapLayerComboBox
+from qgis.gui import QgsMapLayerComboBox
 from osgeo import gdal
 
-# ---------------------------------------------------------------------------
-# GESTÃO DE DEPENDÊNCIAS
-# Evita que o plugin quebre na inicialização se o usuário não tiver as libs
-# ---------------------------------------------------------------------------
-DEPENDENCIES_MISSING = False
-MISSING_ERROR = ""
-
-try:
-    import numpy as np
-    import pandas as pd
-    from .validation_metrics import ValidationMetrics
-    from .confusion_matrix import ConfusionMatrix
-    from .report_generator import ReportGenerator
-except ImportError as e:
-    DEPENDENCIES_MISSING = True
-    MISSING_ERROR = str(e)
-
+from .validation_metrics import ValidationMetrics
+from .confusion_matrix import ConfusionMatrix
+from .report_generator import ReportGenerator
 
 class BaruValidator:
     """QGIS Plugin for ML Model Validation in Baru Detection"""
@@ -54,677 +40,287 @@ class BaruValidator:
         """Initialize the plugin"""
         self.iface = iface
         self.plugin_dir = os.path.dirname(__file__)
-        self.log_message("Plugin directory: {}".format(self.plugin_dir))
-
-        # Load translator
-        locale = QSettings().value('locale/userLocale')[0:2]
-        locale_path = os.path.join(self.plugin_dir, 'i18n', 'BaruValidator_{}.qm'.format(locale))
-        
-        if os.path.exists(locale_path):
-            self.translator = QTranslator()
-            self.translator.load(locale_path)
-            QCoreApplication.installTranslator(self.translator)
-            self.log_message("Translator loaded successfully.")
-
         self.actions = []
-        self.menu = self.tr(u'&Baru Validator')
-        self.toolbar = None
-        self.first_start = None
+        self.menu = u'&Baru Validator'
         self.dialog = None
-
-        # -------------------------------------------------------------------
-        # CORREÇÃO 1: Uso de tempfile para evitar erros de permissão de escrita
-        # -------------------------------------------------------------------
-        self.temp_dir = os.path.join(tempfile.gettempdir(), 'baru_validator_temp')
-        if not os.path.exists(self.temp_dir):
-            try:
-                os.makedirs(self.temp_dir)
-                self.log_message("Temp directory created at: {}".format(self.temp_dir))
-            except OSError as e:
-                self.log_message("Failed to create temp directory: {}".format(e), Qgis.Warning)
-
-        self.reset_plugin_state(silent=True)
-        self.log_message("Plugin initialized successfully.")
-
-    def tr(self, message):
-        """Translate message"""
-        return QCoreApplication.translate('BaruValidator', message)
-
-    def log_message(self, message, level=Qgis.Info):
-        """Log message to QGIS message log"""
-        QgsMessageLog.logMessage(message, 'BaruValidator', level)
-
-    def reset_plugin_state(self, silent=False):
-        """Reset plugin state"""
-        self.classified_layer = None
-        self.validation_layer = None
-        self.classification_field = None
-        self.validation_field = None
-        self.metrics = None
-        self.confusion_matrix = None
-        self.report_path = None
         self.results = {}
+        self.report_generator = ReportGenerator()
+
+    def add_action(self, icon_path, text, callback, enabled_flag=True, add_to_menu=True, add_to_toolbar=True):
+        icon = QIcon(icon_path)
+        action = QAction(icon, text, self.iface.mainWindow())
+        action.triggered.connect(callback)
+        action.setEnabled(enabled_flag)
+
+        if add_to_toolbar:
+            self.iface.addToolBarIcon(action)
+        if add_to_menu:
+            self.iface.addPluginToMenu(self.menu, action)
+
+        self.actions.append(action)
+        return action
 
     def initGui(self):
-        """Create the menu entries and toolbar icons inside the QGIS GUI"""
         icon_path = os.path.join(self.plugin_dir, 'icons', 'baru_icon.png')
-        icon = QIcon(icon_path) if os.path.exists(icon_path) else QIcon()
-
-        # Create action
-        self.action = QAction(icon, u'Baru Validator', self.iface.mainWindow())
-        self.action.triggered.connect(self.run)
-        self.action.setStatusTip(u'Validate ML models for Baru detection')
-        self.iface.addToolBarIcon(self.action)
-        self.iface.addPluginToMenu(self.menu, self.action)
-        self.actions.append(self.action)
+        self.add_action(icon_path, text=u'Validate ML Models', callback=self.run)
 
     def unload(self):
-        """Removes the plugin menu item and icon from QGIS GUI"""
         for action in self.actions:
             self.iface.removePluginMenu(self.menu, action)
             self.iface.removeToolBarIcon(action)
 
-    # -----------------------------------------------------------------------
-    # CORREÇÃO 2: Instalador Automático de Dependências (scikit-learn, etc)
-    # -----------------------------------------------------------------------
-    def show_dependency_dialog(self):
-        """Show a dialog offering to install missing dependencies automatically"""
-        msg_box = QMessageBox()
-        msg_box.setIcon(QMessageBox.Warning)
-        msg_box.setWindowTitle("Dependências Ausentes / Missing Dependencies")
-        text = (
-            "O Baru Validator requer bibliotecas adicionais do Python que não estão "
-            "instaladas no seu QGIS (numpy, pandas, scikit-learn, shapely).\n\n"
-            f"Detalhe do Erro: {MISSING_ERROR}\n\n"
-            "Deseja que o plugin tente instalar essas dependências automaticamente agora? "
-            "(Necessita conexão com a internet)"
-        )
-        msg_box.setText(text)
-        
-        btn_install = msg_box.addButton("Instalar Automaticamente", QMessageBox.AcceptRole)
-        btn_cancel = msg_box.addButton("Cancelar", QMessageBox.RejectRole)
-        
-        msg_box.exec_()
-        
-        if msg_box.clickedButton() == btn_install:
-            self.install_dependencies()
-
-    def install_dependencies(self):
-        """Run pip install using the QGIS Python executable"""
-        QApplication.setOverrideCursor(Qt.WaitCursor)
-        try:
-            self.log_message("Iniciando instalação de dependências via pip...")
-            # sys.executable garante que estamos usando o Python embutido do QGIS (OSGeo4W)
-            subprocess.check_call(
-                [sys.executable, "-m", "pip", "install", "numpy", "pandas", "scikit-learn", "shapely"]
-            )
-            QApplication.restoreOverrideCursor()
-            QMessageBox.information(
-                None, 
-                "Instalação Concluída", 
-                "As dependências foram instaladas com sucesso!\n\n"
-                "Por favor, REINICIE O QGIS completamente para poder utilizar o Baru Validator."
-            )
-        except Exception as e:
-            QApplication.restoreOverrideCursor()
-            self.log_message(f"Erro ao instalar dependências: {str(e)}", Qgis.Critical)
-            QMessageBox.critical(
-                None, 
-                "Erro de Instalação", 
-                "Ocorreu um erro ao tentar instalar as bibliotecas automaticamente.\n\n"
-                "Por favor, abra o OSGeo4W Shell (se estiver no Windows) ou seu terminal e execute:\n"
-                "python -m pip install numpy pandas scikit-learn shapely"
-            )
-
     def run(self):
-        """Run method that performs all the real work"""
-        # Checa dependências antes de tentar instanciar a UI (que usa numpy/pandas)
-        if DEPENDENCIES_MISSING:
-            self.show_dependency_dialog()
-            return
+        if not self.dialog:
+            self.dialog = QDialog(self.iface.mainWindow())
+            self.dialog.setWindowTitle("Baru Validator - ML Validation Suite")
+            self.dialog.resize(900, 700)
+            
+            main_layout = QVBoxLayout()
+            self.tabs = QTabWidget()
+            
+            # Aba 1: Validação Individual
+            self.tab_individual = QWidget()
+            self.setup_individual_tab()
+            self.tabs.addTab(self.tab_individual, "Validação Individual")
+            
+            # Aba 2: Dashboard Consolidado
+            self.tab_dashboard = QWidget()
+            self.setup_dashboard_tab()
+            self.tabs.addTab(self.tab_dashboard, "Dashboard Consolidado (Master)")
+            
+            main_layout.addWidget(self.tabs)
+            self.dialog.setLayout(main_layout)
 
-        if self.dialog is None:
-            self.dialog = BaruValidatorDialog(self.iface, self)
         self.dialog.show()
-
-
-class BaruValidatorDialog(QDialog):
-    """Main dialog for Baru Validator"""
-
-    def __init__(self, iface, plugin):
-        """Initialize the dialog"""
-        super().__init__()
-        self.iface = iface
-        self.plugin = plugin
-        self.setWindowTitle("Baru Validator - ML Model Validation")
-        self.setGeometry(100, 100, 900, 700)
-        self.setModal(False)
-
-        # Initialize metrics calculator
-        self.metrics = ValidationMetrics()
-        self.confusion_matrix = ConfusionMatrix()
-        self.report_generator = ReportGenerator()
-
-        # Create UI
-        self.setup_ui()
-
-    def setup_ui(self):
-        """Setup the user interface"""
+        
+    def setup_individual_tab(self):
         layout = QVBoxLayout()
-
-        # Create tabs
-        self.tabs = QTabWidget()
+        group_inputs = QGroupBox("Input Data")
+        vbox_inputs = QVBoxLayout()
         
-        # Tab 1: Input Selection
-        self.tab_input = self.create_input_tab()
-        self.tabs.addTab(self.tab_input, "1. Input Data")
-
-        # Tab 2: Validation
-        self.tab_validation = self.create_validation_tab()
-        self.tabs.addTab(self.tab_validation, "2. Validation")
-
-        # Tab 3: Results
-        self.tab_results = self.create_results_tab()
-        self.tabs.addTab(self.tab_results, "3. Results")
-
-        # Tab 4: Report
-        self.tab_report = self.create_report_tab()
-        self.tabs.addTab(self.tab_report, "4. Report")
-
-        layout.addWidget(self.tabs)
-
-        # Bottom buttons
-        button_layout = QHBoxLayout()
-        
-        self.btn_reset = QPushButton("Reset")
-        self.btn_reset.clicked.connect(self.reset_form)
-        button_layout.addWidget(self.btn_reset)
-
-        self.btn_close = QPushButton("Close")
-        self.btn_close.clicked.connect(self.close)
-        button_layout.addWidget(self.btn_close)
-
-        layout.addLayout(button_layout)
-        self.setLayout(layout)
-
-    def create_input_tab(self):
-        """Create input data tab"""
-        widget = QWidget()
-        layout = QVBoxLayout()
-
-        # Classified layer selection
-        group_classified = QGroupBox("Classified Layer (Raster or Vector)")
-        group_layout = QVBoxLayout()
-        
-        label_classified = QLabel("Select classified layer:")
+        hbox_class = QHBoxLayout()
+        hbox_class.addWidget(QLabel("Classified Layer (Raster/Vector):"))
         self.combo_classified = QgsMapLayerComboBox()
-        self.combo_classified.setAllowEmptyLayer(False)
+        self.combo_classified.setFilters(QgsMapLayerProxyModel.RasterLayer | QgsMapLayerProxyModel.VectorLayer)
+        hbox_class.addWidget(self.combo_classified)
         
-        group_layout.addWidget(label_classified)
-        group_layout.addWidget(self.combo_classified)
-        group_classified.setLayout(group_layout)
-        layout.addWidget(group_classified)
-
-        # Classification field
-        group_field_class = QGroupBox("Classification Field")
-        field_layout = QVBoxLayout()
-        
-        label_field = QLabel("Field with class values (numeric):")
+        hbox_class_field = QHBoxLayout()
+        hbox_class_field.addWidget(QLabel("Class Field (if Vector):"))
         self.combo_class_field = QComboBox()
-        self.combo_classified.layerChanged.connect(self.update_class_fields)
+        hbox_class_field.addWidget(self.combo_class_field)
         
-        field_layout.addWidget(label_field)
-        field_layout.addWidget(self.combo_class_field)
-        group_field_class.setLayout(field_layout)
-        layout.addWidget(group_field_class)
-
-        # Validation layer selection
-        group_validation = QGroupBox("Validation Layer (Vector: Points or Polygons)")
-        val_layout = QVBoxLayout()
-        
-        label_validation = QLabel("Select validation layer:")
+        hbox_val = QHBoxLayout()
+        hbox_val.addWidget(QLabel("Validation Layer (Vector):"))
         self.combo_validation = QgsMapLayerComboBox()
-        self.combo_validation.setAllowEmptyLayer(False)
         self.combo_validation.setFilters(QgsMapLayerProxyModel.VectorLayer)
+        hbox_val.addWidget(self.combo_validation)
         
-        val_layout.addWidget(label_validation)
-        val_layout.addWidget(self.combo_validation)
-        group_validation.setLayout(val_layout)
-        layout.addWidget(group_validation)
-
-        # Validation field
-        group_field_val = QGroupBox("Validation Field")
-        val_field_layout = QVBoxLayout()
-        
-        label_val_field = QLabel("Field with reference class values (numeric):")
+        hbox_val_field = QHBoxLayout()
+        hbox_val_field.addWidget(QLabel("Validation Class Field:"))
         self.combo_val_field = QComboBox()
-        self.combo_validation.layerChanged.connect(self.update_validation_fields)
+        hbox_val_field.addWidget(self.combo_val_field)
         
-        val_field_layout.addWidget(label_val_field)
-        val_field_layout.addWidget(self.combo_val_field)
-        group_field_val.setLayout(val_field_layout)
-        layout.addWidget(group_field_val)
-
-        layout.addStretch()
-        widget.setLayout(layout)
-        return widget
-
-    def create_validation_tab(self):
-        """Create validation tab"""
-        widget = QWidget()
-        layout = QVBoxLayout()
-
-        # Progress bar
-        self.progress_bar = QProgressBar()
-        self.progress_bar.setVisible(False)
-        layout.addWidget(self.progress_bar)
-
-        # Validation options
-        group_options = QGroupBox("Validation Options")
-        options_layout = QVBoxLayout()
-
-        self.check_kappa = QCheckBox("Calculate Cohen's Kappa")
-        self.check_kappa.setChecked(True)
-        options_layout.addWidget(self.check_kappa)
-
-        self.check_qadi = QCheckBox("Calculate QADI Index")
-        self.check_qadi.setChecked(True)
-        options_layout.addWidget(self.check_qadi)
-
-        self.check_f1 = QCheckBox("Calculate F1-Score (per class)")
-        self.check_f1.setChecked(True)
-        options_layout.addWidget(self.check_f1)
-
-        self.check_mcc = QCheckBox("Calculate Matthews Correlation Coefficient (MCC)")
-        self.check_mcc.setChecked(True)
-        options_layout.addWidget(self.check_mcc)
-
-        self.check_producer = QCheckBox("Calculate Producer's Accuracy (Recall)")
-        self.check_producer.setChecked(True)
-        options_layout.addWidget(self.check_producer)
-
-        self.check_user = QCheckBox("Calculate User's Accuracy (Precision)")
-        self.check_user.setChecked(True)
-        options_layout.addWidget(self.check_user)
-
-        self.check_confusion = QCheckBox("Generate Confusion Matrix")
-        self.check_confusion.setChecked(True)
-        options_layout.addWidget(self.check_confusion)
-
-        group_options.setLayout(options_layout)
-        layout.addWidget(group_options)
-
-        self.btn_validate = QPushButton("Run Validation")
-        self.btn_validate.clicked.connect(self.run_validation)
-        layout.addWidget(self.btn_validate)
-
-        layout.addStretch()
-        widget.setLayout(layout)
-        return widget
-
-    def create_results_tab(self):
-        """Create results tab"""
-        widget = QWidget()
-        layout = QVBoxLayout()
-
-        # Results text area
-        label_results = QLabel("Validation Results:")
+        vbox_inputs.addLayout(hbox_class)
+        vbox_inputs.addLayout(hbox_class_field)
+        vbox_inputs.addLayout(hbox_val)
+        vbox_inputs.addLayout(hbox_val_field)
+        group_inputs.setLayout(vbox_inputs)
+        
+        group_reports = QGroupBox("Report Options")
+        hbox_reports = QHBoxLayout()
+        self.check_include_confusion = QCheckBox("Include Confusion Matrix")
+        self.check_include_confusion.setChecked(True)
+        hbox_reports.addWidget(self.check_include_confusion)
+        group_reports.setLayout(hbox_reports)
+        
+        hbox_buttons = QHBoxLayout()
+        btn_validate = QPushButton("Run Validation")
+        btn_validate.clicked.connect(self.run_validation)
+        btn_report = QPushButton("Generate HTML Report")
+        btn_report.clicked.connect(self.generate_report)
+        
+        hbox_buttons.addWidget(btn_validate)
+        hbox_buttons.addWidget(btn_report)
+        
         self.text_results = QTextEdit()
         self.text_results.setReadOnly(True)
         
-        layout.addWidget(label_results)
+        layout.addWidget(group_inputs)
+        layout.addWidget(group_reports)
         layout.addWidget(self.text_results)
-
-        # Results table
-        label_table = QLabel("Confusion Matrix:")
-        self.table_confusion = QTableWidget()
-        self.table_confusion.setColumnCount(0)
-        self.table_confusion.setRowCount(0)
+        layout.addLayout(hbox_buttons)
+        self.tab_individual.setLayout(layout)
         
-        layout.addWidget(label_table)
-        layout.addWidget(self.table_confusion)
+        self.combo_classified.layerChanged.connect(self.update_classified_fields)
+        self.combo_validation.layerChanged.connect(self.update_validation_fields)
+        self.update_classified_fields(self.combo_classified.currentLayer())
+        self.update_validation_fields(self.combo_validation.currentLayer())
 
-        widget.setLayout(layout)
-        return widget
-
-    def create_report_tab(self):
-        """Create report tab"""
-        widget = QWidget()
+    def setup_dashboard_tab(self):
         layout = QVBoxLayout()
+        lbl_info = QLabel("<b>Módulo Consolidado:</b> Adicione os relatórios HTML de acurácia e SHAP para comparar todos os modelos.")
+        layout.addWidget(lbl_info)
+        
+        self.table_models = QTableWidget(0, 3)
+        self.table_models.setHorizontalHeaderLabels(["Nome do Modelo", "Relatório Acurácia", "Relatório SHAP"])
+        self.table_models.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        self.table_models.setSelectionBehavior(QAbstractItemView.SelectRows)
+        layout.addWidget(self.table_models)
+        
+        hbox_table_btns = QHBoxLayout()
+        btn_add_model = QPushButton("+ Adicionar Modelo")
+        btn_add_model.clicked.connect(self.add_model_row)
+        btn_remove_model = QPushButton("- Remover Modelo")
+        btn_remove_model.clicked.connect(self.remove_model_row)
+        hbox_table_btns.addWidget(btn_add_model)
+        hbox_table_btns.addWidget(btn_remove_model)
+        layout.addLayout(hbox_table_btns)
+        
+        btn_generate_master = QPushButton("Gerar Dashboard Master (HTML)")
+        btn_generate_master.setStyleSheet("background-color: #1f4788; color: white; font-weight: bold; padding: 10px;")
+        btn_generate_master.clicked.connect(self.generate_master_dashboard)
+        layout.addWidget(btn_generate_master)
+        
+        self.tab_dashboard.setLayout(layout)
 
-        # Report options
-        group_report = QGroupBox("Report Generation")
-        report_layout = QVBoxLayout()
+    def add_model_row(self):
+        model_name, ok = QInputDialog.getText(self.dialog, "Novo Modelo", "Nome do Modelo (ex: Random Forest):")
+        if ok and model_name:
+            acc_path, _ = QFileDialog.getOpenFileName(self.dialog, f"Acurácia HTML para {model_name}", "", "HTML Files (*.html)")
+            shap_path, _ = QFileDialog.getOpenFileName(self.dialog, f"SHAP HTML para {model_name} (Opcional)", "", "HTML Files (*.html)")
+            
+            row = self.table_models.rowCount()
+            self.table_models.insertRow(row)
+            self.table_models.setItem(row, 0, QTableWidgetItem(model_name))
+            self.table_models.setItem(row, 1, QTableWidgetItem(acc_path if acc_path else ""))
+            self.table_models.setItem(row, 2, QTableWidgetItem(shap_path if shap_path else ""))
 
-        label_format = QLabel("Report Format:")
-        self.combo_format = QComboBox()
-        self.combo_format.addItems(["PDF", "HTML", "CSV"])
-        report_layout.addWidget(label_format)
-        report_layout.addWidget(self.combo_format)
+    def remove_model_row(self):
+        current_row = self.table_models.currentRow()
+        if current_row >= 0:
+            self.table_models.removeRow(current_row)
 
-        self.check_include_confusion = QCheckBox("Include Confusion Matrix")
-        self.check_include_confusion.setChecked(True)
-        report_layout.addWidget(self.check_include_confusion)
+    def generate_master_dashboard(self):
+        if self.table_models.rowCount() == 0:
+            QMessageBox.warning(self.dialog, "Aviso", "Adicione pelo menos um modelo à tabela!")
+            return
+            
+        file_path, _ = QFileDialog.getSaveFileName(self.dialog, "Salvar Dashboard", "Dashboard_Master.html", "HTML Files (*.html)")
+        if not file_path: return
+            
+        models_data = []
+        # EXTRAÇÃO SEGURA (Evita crash se a célula for nula)
+        for row in range(self.table_models.rowCount()):
+            i_name = self.table_models.item(row, 0)
+            i_acc = self.table_models.item(row, 1)
+            i_shap = self.table_models.item(row, 2)
+            
+            name = i_name.text().strip() if i_name and i_name.text() else f"Modelo {row+1}"
+            acc_path = i_acc.text().strip() if i_acc else ""
+            shap_path = i_shap.text().strip() if i_shap else ""
+            
+            models_data.append({'name': name, 'acc_path': acc_path, 'shap_path': shap_path})
+            
+        try:
+            self.report_generator.generate_master_dashboard(file_path, models_data)
+            QMessageBox.information(self.dialog, "Sucesso", "Dashboard Consolidado gerado com sucesso!")
+        except Exception as e:
+            # RASTREAMENTO DE ERRO: Mostra a linha exata onde falhou
+            QMessageBox.critical(self.dialog, "Erro Fatal", f"Ocorreu um erro ao processar o Dashboard:\n{str(e)}\n\nDetalhes Técnicos:\n{traceback.format_exc()}")
 
-        self.check_include_charts = QCheckBox("Include Charts and Graphs")
-        self.check_include_charts.setChecked(True)
-        report_layout.addWidget(self.check_include_charts)
-
-        group_report.setLayout(report_layout)
-        layout.addWidget(group_report)
-
-        # Generate report button
-        self.btn_generate_report = QPushButton("Generate Report")
-        self.btn_generate_report.clicked.connect(self.generate_report)
-        layout.addWidget(self.btn_generate_report)
-
-        # Export button
-        self.btn_export = QPushButton("Export Results to CSV")
-        self.btn_export.clicked.connect(self.export_results)
-        layout.addWidget(self.btn_export)
-
-        layout.addStretch()
-        widget.setLayout(layout)
-        return widget
-
-    def update_class_fields(self):
-        """Update classification field combo box"""
-        layer = self.combo_classified.currentLayer()
+    def update_classified_fields(self, layer):
         self.combo_class_field.clear()
-        
-        if layer:
-            if layer.type() == QgsMapLayer.VectorLayer:
-                for field in layer.fields():
-                    if field.type() in [1, 2, 3, 4, 6]:  # Integer and Real types
-                        self.combo_class_field.addItem(field.name())
-            elif layer.type() == QgsMapLayer.RasterLayer:
-                self.combo_class_field.addItem("Band 1")
-                for i in range(2, layer.bandCount() + 1):
-                    self.combo_class_field.addItem("Band {}".format(i))
+        if isinstance(layer, QgsVectorLayer):
+            self.combo_class_field.setEnabled(True)
+            self.combo_class_field.addItems([f.name() for f in layer.fields()])
+        else:
+            self.combo_class_field.setEnabled(False)
 
-    def update_validation_fields(self):
-        """Update validation field combo box"""
-        layer = self.combo_validation.currentLayer()
+    def update_validation_fields(self, layer):
         self.combo_val_field.clear()
-        
-        if layer and layer.type() == QgsMapLayer.VectorLayer:
-            for field in layer.fields():
-                if field.type() in [1, 2, 3, 4, 6]:  # Integer and Real types
-                    self.combo_val_field.addItem(field.name())
+        if isinstance(layer, QgsVectorLayer):
+            self.combo_val_field.addItems([f.name() for f in layer.fields()])
 
     def run_validation(self):
-        """Run validation analysis"""
-        try:
-            classified_layer = self.combo_classified.currentLayer()
-            validation_layer = self.combo_validation.currentLayer()
-            class_field = self.combo_class_field.currentText()
-            val_field = self.combo_val_field.currentText()
-
-            if not classified_layer or not validation_layer or not class_field or not val_field:
-                QMessageBox.warning(self, "Warning", "Please select all required layers and fields.")
-                return
-
-            self.progress_bar.setVisible(True)
-            self.progress_bar.setValue(0)
-
-            # Perform point-by-point validation
-            y_true = []
-            y_pred = []
-            
-            # Setup coordinate transformation if needed
-            crs_project = QgsProject.instance().crs()
-            crs_val = validation_layer.crs()
-            crs_class = classified_layer.crs()
-            
-            xform_val = QgsCoordinateTransform(crs_val, crs_class, QgsProject.instance())
-            
-            features = list(validation_layer.getFeatures())
-            total = len(features)
-            
-            if total == 0:
-                QMessageBox.warning(self, "Warning", "Validation layer has no features.")
-                return
-
-            # Extract data
-            for i, feat in enumerate(features):
-                # Get reference value
-                val_ref = feat[val_field]
-                if val_ref is None:
-                    continue
-                
-                # Get point for sampling
-                geom = feat.geometry()
-                if geom.isMultipart():
-                    point = geom.asMultiPoint()[0] if geom.wkbType() == QgsWkbTypes.MultiPoint else geom.centroid().asPoint()
-                else:
-                    point = geom.asPoint() if geom.wkbType() == QgsWkbTypes.Point else geom.centroid().asPoint()
-                
-                # Transform point to classified layer CRS
-                point_trans = xform_val.transform(point)
-                
-                # Sample classified layer
-                val_class = None
-                try:
-                    if classified_layer.type() == QgsMapLayer.RasterLayer:
-                        # Robust Raster Sampling using identify()
-                        # This is more reliable than sample() across different QGIS versions
-                        band_idx = int(class_field.split(" ")[1]) if "Band" in class_field else 1
-                        
-                        # Use identify method which is what the "Identify Tool" uses
-                        ident = classified_layer.dataProvider().identify(point_trans, QgsRaster.IdentifyFormatValue)
-                        if ident.isValid():
-                            results = ident.results()
-                            if band_idx in results:
-                                val_raw = results[band_idx]
-                                if val_raw is not None:
-                                    val_class = val_raw
-                        
-                        # Fallback to sample if identify fails
-                        if val_class is None:
-                            sample_res = classified_layer.dataProvider().sample(point_trans, band_idx)
-                            if isinstance(sample_res, tuple):
-                                res_ok, val_dict = sample_res
-                                if res_ok: val_class = val_dict.get(band_idx)
-                            elif isinstance(sample_res, dict):
-                                val_class = sample_res.get(band_idx)
-                            elif isinstance(sample_res, (int, float)):
-                                val_class = sample_res
-
-                    else:
-                        # Sample vector (spatial join/intersection)
-                        from qgis.core import QgsFeatureRequest
-                        request = QgsFeatureRequest().setFilterRect(QgsRectangle(point_trans, point_trans))
-                        for c_feat in classified_layer.getFeatures(request):
-                            if c_feat.geometry().contains(point_trans):
-                                val_class = c_feat[class_field]
-                                break
-                except Exception as e:
-                    self.plugin.log_message("Sampling error at point {}: {}".format(i, str(e)), Qgis.Warning)
-                    continue
-                
-                if val_class is not None:
-                    y_true.append(int(val_ref))
-                    y_pred.append(int(val_class))
-                
-                if i % 10 == 0:
-                    self.progress_bar.setValue(int(30 * (i / total)))
-
-            y_true = np.array(y_true)
-            y_pred = np.array(y_pred)
-
-            if len(y_true) == 0:
-                QMessageBox.warning(self, "Warning", "No overlapping data found between layers.")
-                return
-
-            self.progress_bar.setValue(50)
-
-            # Calculate metrics
-            results = {}
-            
-            if self.check_kappa.isChecked():
-                results['kappa'] = self.metrics.calculate_kappa(y_true, y_pred)
-                self.progress_bar.setValue(60)
-
-            if self.check_qadi.isChecked():
-                results['qadi'] = self.metrics.calculate_qadi(y_true, y_pred)
-                self.progress_bar.setValue(70)
-
-            if self.check_f1.isChecked():
-                results['f1_scores'] = self.metrics.calculate_f1_scores(y_true, y_pred)
-                self.progress_bar.setValue(75)
-
-            if self.check_mcc.isChecked():
-                results['mcc'] = self.metrics.calculate_mcc(y_true, y_pred)
-                self.progress_bar.setValue(80)
-
-            if self.check_producer.isChecked():
-                results['producer_accuracy'] = self.metrics.calculate_producer_accuracy(y_true, y_pred)
-                self.progress_bar.setValue(85)
-
-            if self.check_user.isChecked():
-                results['user_accuracy'] = self.metrics.calculate_user_accuracy(y_true, y_pred)
-                self.progress_bar.setValue(90)
-
-            if self.check_confusion.isChecked():
-                results['confusion_matrix'] = self.confusion_matrix.create_matrix(y_true, y_pred)
-                self.progress_bar.setValue(95)
-
-            # Store results
-            self.plugin.results = results
-            
-            # Display results
-            self.display_results(results)
-            self.progress_bar.setValue(100)
-            
-            QMessageBox.information(self, "Success", "Validation completed with {} points!".format(len(y_true)))
-
-        except Exception as e:
-            self.plugin.log_message("Error during validation: {}".format(str(e)), Qgis.Critical)
-            import traceback
-            self.plugin.log_message(traceback.format_exc(), Qgis.Critical)
-            QMessageBox.critical(self, "Error", "Validation failed: {}".format(str(e)))
-        finally:
-            self.progress_bar.setVisible(False)
-
-    def display_results(self, results):
-        """Display validation results"""
-        text = "=== BARU VALIDATOR - RESULTS ===\n\n"
-        text += "Validation Date: {}\n\n".format(datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
-
-        if 'kappa' in results:
-            text += "Cohen's Kappa: {:.4f}\n".format(results['kappa'])
-            text += "  Interpretation: "
-            kappa = results['kappa']
-            if kappa < 0:
-                text += "Poor agreement\n"
-            elif kappa < 0.2:
-                text += "Slight agreement\n"
-            elif kappa < 0.4:
-                text += "Fair agreement\n"
-            elif kappa < 0.6:
-                text += "Moderate agreement\n"
-            elif kappa < 0.8:
-                text += "Substantial agreement\n"
-            else:
-                text += "Almost perfect agreement\n"
-
-        if 'qadi' in results:
-            text += "\nQADI Index: {:.4f}\n".format(results['qadi'])
-            text += "  (Lower is better; 0 = perfect, 1 = worst)\n"
-
-        if 'mcc' in results:
-            text += "\nMatthews Correlation Coefficient: {:.4f}\n".format(results['mcc'])
-            text += "  (Range: -1 to 1; 1 = perfect, 0 = random)\n"
-
-        if 'f1_scores' in results:
-            text += "\nF1-Scores (per class):\n"
-            for class_id, f1 in results['f1_scores'].items():
-                text += "  Class {}: {:.4f}\n".format(class_id, f1)
-
-        if 'producer_accuracy' in results:
-            text += "\nProducer's Accuracy (Recall per class):\n"
-            for class_id, acc in results['producer_accuracy'].items():
-                text += "  Class {}: {:.4f}\n".format(class_id, acc)
-
-        if 'user_accuracy' in results:
-            text += "\nUser's Accuracy (Precision per class):\n"
-            for class_id, acc in results['user_accuracy'].items():
-                text += "  Class {}: {:.4f}\n".format(class_id, acc)
-
-        self.text_results.setText(text)
-
-        # Display confusion matrix
-        if 'confusion_matrix' in results:
-            self.display_confusion_matrix(results['confusion_matrix'])
-
-    def display_confusion_matrix(self, cm):
-        """Display confusion matrix in table"""
-        classes = sorted(set(cm.index) | set(cm.columns))
-        n_classes = len(classes)
+        classified_layer = self.combo_classified.currentLayer()
+        validation_layer = self.combo_validation.currentLayer()
+        val_field = self.combo_val_field.currentText()
         
-        self.table_confusion.setRowCount(n_classes + 1)
-        self.table_confusion.setColumnCount(n_classes + 1)
+        if not classified_layer or not validation_layer or not val_field:
+            QMessageBox.warning(self.dialog, "Warning", "Please select all required layers and fields.")
+            return
 
-        # Header
-        self.table_confusion.setItem(0, 0, QTableWidgetItem("Reference \\ Classified"))
-        for i, cls in enumerate(classes):
-            self.table_confusion.setItem(0, i + 1, QTableWidgetItem(str(cls)))
-            self.table_confusion.setItem(i + 1, 0, QTableWidgetItem(str(cls)))
+        self.text_results.setText("Extracting samples and calculating metrics... Please wait.")
+        QgsApplication.processEvents()
 
-        # Data
-        for i, ref_cls in enumerate(classes):
-            for j, cls_cls in enumerate(classes):
-                value = cm.loc[ref_cls, cls_cls] if ref_cls in cm.index and cls_cls in cm.columns else 0
-                self.table_confusion.setItem(i + 1, j + 1, QTableWidgetItem(str(int(value))))
+        try:
+            y_true, y_pred = self.extract_samples(classified_layer, validation_layer, val_field)
+            if len(y_true) == 0:
+                self.text_results.setText("Error: No intersecting samples found.")
+                return
+
+            metrics = ValidationMetrics.calculate_all_metrics(y_true, y_pred)
+            cm_df = ConfusionMatrix.create_matrix(y_true, y_pred)
+            self.results = metrics
+            self.results['confusion_matrix'] = cm_df
+
+            report_text = f"Overall Accuracy: {metrics['overall_accuracy']:.4f}\n"
+            report_text += f"Kappa: {metrics['kappa']:.4f}\n"
+            report_text += f"QADI: {metrics['qadi']:.4f}\n"
+            report_text += f"MCC: {metrics['mcc']:.4f}\n\n"
+            report_text += ConfusionMatrix.format_matrix_for_display(cm_df)
+            
+            self.text_results.setText(report_text)
+            
+        except Exception as e:
+            self.text_results.setText(f"Error during validation: {str(e)}")
+
+    def extract_samples(self, classified_layer, validation_layer, val_field):
+        y_true, y_pred = [], []
+        class_field = self.combo_class_field.currentText()
+        
+        crs_src = validation_layer.crs()
+        crs_dest = classified_layer.crs()
+        transform = QgsCoordinateTransform(crs_src, crs_dest, QgsProject.instance())
+
+        is_raster = isinstance(classified_layer, QgsRasterLayer)
+        
+        if is_raster:
+            provider = classified_layer.dataProvider()
+            for feat in validation_layer.getFeatures():
+                geom = feat.geometry()
+                if geom.isNull(): continue
+                geom.transform(transform)
+                pt = geom.centroid().asPoint()
+                
+                val, res = provider.sample(pt, 1)
+                if res:
+                    y_true.append(int(feat[val_field]))
+                    y_pred.append(int(val))
+        else:
+            idx = QgsSpatialIndex(classified_layer.getFeatures())
+            for feat in validation_layer.getFeatures():
+                geom = feat.geometry()
+                if geom.isNull(): continue
+                geom.transform(transform)
+                pt = geom.centroid().asPoint()
+                
+                intersect_ids = idx.intersects(geom.boundingBox())
+                for fid in intersect_ids:
+                    c_feat = classified_layer.getFeature(fid)
+                    if c_feat.geometry().contains(pt):
+                        y_true.append(int(feat[val_field]))
+                        y_pred.append(int(c_feat[class_field]))
+                        break
+
+        return np.array(y_true), np.array(y_pred)
 
     def generate_report(self):
-        """Generate validation report"""
-        if not self.plugin.results:
-            QMessageBox.warning(self, "Warning", "No validation results to report. Run validation first.")
+        if not self.results:
+            QMessageBox.warning(self.dialog, "Warning", "Run validation first.")
             return
-
-        file_path, _ = QFileDialog.getSaveFileName(
-            self, "Save Report", "", 
-            "HTML Files (*.html);;CSV Files (*.csv)"
-        )
-
+            
+        file_path, _ = QFileDialog.getSaveFileName(self.dialog, "Save Report", "Validation_Report.html", "HTML Files (*.html)")
         if file_path:
-            try:
-                report_format = self.combo_format.currentText().lower()
-                self.report_generator.generate(
-                    file_path, 
-                    self.plugin.results,
-                    report_format,
-                    include_confusion=self.check_include_confusion.isChecked(),
-                    include_charts=self.check_include_charts.isChecked()
-                )
-                QMessageBox.information(self, "Success", "Report generated successfully!")
-                self.plugin.log_message("Report saved to: {}".format(file_path))
-            except Exception as e:
-                QMessageBox.critical(self, "Error", "Failed to generate report: {}".format(str(e)))
-
-    def export_results(self):
-        """Export results to CSV"""
-        if not self.plugin.results:
-            QMessageBox.warning(self, "Warning", "No results to export. Run validation first.")
-            return
-
-        file_path, _ = QFileDialog.getSaveFileName(self, "Save Results", "", "CSV Files (*.csv)")
-        
-        if file_path:
-            try:
-                self.report_generator.export_csv(file_path, self.plugin.results)
-                QMessageBox.information(self, "Success", "Results exported successfully!")
-            except Exception as e:
-                QMessageBox.critical(self, "Error", "Failed to export results: {}".format(str(e)))
-
-    def reset_form(self):
-        """Reset the form"""
-        self.combo_classified.setLayer(None)
-        self.combo_validation.setLayer(None)
-        self.combo_class_field.clear()
-        self.combo_val_field.clear()
-        self.text_results.clear()
-        self.table_confusion.setRowCount(0)
-        self.table_confusion.setColumnCount(0)
-        self.plugin.reset_plugin_state()
+            self.report_generator.generate(file_path, self.results)
+            QMessageBox.information(self.dialog, "Success", "Report generated successfully!")
