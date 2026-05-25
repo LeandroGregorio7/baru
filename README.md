@@ -209,9 +209,36 @@ Contact: leandrogeosmart@gmail.com
 
 ## Changelog
 
-### Version 1.1.0 (2025-05-02)
-- Initial release
-- Core validation metrics implementation
-- Report generation in PDF, HTML, and CSV formats
-- Support for raster and vector input data
-- Confusion matrix calculation and display
+[1.2.0] - 2026-05-25 (Master Dashboard Update)
+✨ Features
+New "Consolidated Dashboard (Master)" Module: Added a new tab to the main interface allowing users to load multiple accuracy reports simultaneously.
+
+Side-by-Side Analytical Comparison: The plugin now generates an interactive HTML Dossier containing:
+
+Comparison table of global metrics (Overall Accuracy, Kappa, QADI, MCC).
+
+Target-specific metrics table (F1-Score, Recall, and Precision for Baru).
+
+Confusion Matrices displayed in a grid for comparative spatial analysis.
+
+Automatic integration with SHAP reports (displaying the most influential variable/band per model).
+
+Automated AI Recommendation: The Master Dashboard now mathematically analyzes the F1-Score and generates a dynamic, well-founded conclusion text, recommending the most suitable algorithm for mapping the area.
+
+Interactive Charts (Chart.js): Rendering of a bar chart comparing Global Accuracy and Baru F1-Score across all evaluated models.
+
+Built-in Export: Dedicated buttons added to the top of the Master Dashboard for one-click report export to .PDF and .DOCX (Word) formats.
+
+🛠 Enhancements
+New Robust Extractor (HTML Parser): The report reading engine (report_generator.py) was completely rewritten using a "Brute Force" scanning method (Direct Regex). It is now immune to formatting breaks, ensuring absolute backward compatibility with HTML reports generated in previous versions.
+
+JSON Metadata Injection: The new individual reports now discretely inject results via JSON, making communication with the Master Dashboard faster and bulletproof.
+
+Type Protection (_safe_float): Added an absolute value converter. If older tables contain encoding anomalies (like commas instead of dots), the plugin cleans the data and prevents extraction failures (unintentional zeros).
+
+Updated Interface Filters: Layer selection menus in the UI (baru_validator.py) were migrated from native QgsMapLayerComboBox to QgsMapLayerProxyModel, fixing a compatibility bug in QGIS version 3.44.7-Solothurn.
+
+🐛 Bug Fixes
+Fixed a bug where QGIS would fatally crash if sections or confusion matrices in individual reports had empty <td> tags or CSS anomalies.
+
+Fixed missing file extensions when saving files (The plugin now automatically forces the .html extension if the operating system ignores it).
