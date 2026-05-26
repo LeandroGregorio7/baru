@@ -26,9 +26,12 @@ The plugin calculates the following advanced metrics:
 
 📽️See below how B.A.R.U Works📽️
 
+1- How analyze models and export to html report.
+https://github.com/user-attachments/assets/7f6de455-e43d-4402-a6e8-87cfb854263f
 
-https://github.com/user-attachments/assets/a799fb2c-0135-4e07-969d-01d0097b98b3
 
+2- Compare several model and make a intaractive dashboard html
+https://github.com/user-attachments/assets/3e30a23a-1a2e-4712-89e1-7fec2d21fbcf
 
 
 ### Report Generation
