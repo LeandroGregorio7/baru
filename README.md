@@ -245,3 +245,34 @@ Updated Interface Filters: Layer selection menus in the UI (baru_validator.py) w
 Fixed a bug where QGIS would fatally crash if sections or confusion matrices in individual reports had empty <td> tags or CSS anomalies.
 
 Fixed missing file extensions when saving files (The plugin now automatically forces the .html extension if the operating system ignores it).
+
+NEW Baru Validator v2.0.0 - The Hybrid Geo-Score Update 🚀
+We are proud to announce version 2.0.0 of the Baru Validator! This is the biggest update to the tool since its creation. It introduces a groundbreaking validation methodology for Remote Sensing that cross-references traditional statistical metrics with the spatial realism of classifications, actively combating overfitting in Machine Learning algorithms.
+
+
+🎉 New Features
+New Hybrid Module (Geo-Score): Added the "Hybrid Evaluation" tab. The plugin now evaluates the spatial realism (Spatial Conformity) of models by crossing the Target-Class F1-Score with the generated geometry (total predicted area, average canopy patch size, and number of fragments).
+
+Automatic Overfitting Detection: The algorithm now severely penalizes models that overestimate the target or generate unrealistic continuous patches. This reveals the crucial difference between a model that simply "memorized" the validation data (Illusory Accuracy) and a model that actually generalized well across the real landscape.
+
+Interactive Hybrid Dashboard (HTML): Generates a brand new comparative HTML report that ranks models based on their Final Hybrid Score. It includes equilibrium charts (Statistical vs. Spatial) and automated analytical conclusions pointing out the best cartographic model.
+<img width="1449" height="727" alt="geoscore1" src="https://github.com/user-attachments/assets/827f298c-9742-4393-ba45-8f4baa0f27b4" />
+<img width="1471" height="389" alt="geoscore2" src="https://github.com/user-attachments/assets/d008275d-bc4f-47cf-8fc1-8293d0e0bda1" />
+
+⚡ Enhancements
+Universal Support for Rasters and Vectors: The Geo-Score module now natively accepts image files (.tif/.tiff via GDAL/SciPy in-memory processing) in addition to vectors (.shp, .gpkg), eliminating the need for prior vectorization to analyze spatial patches.
+
+Target-Class Focus: The hybrid engine no longer relies on Global Accuracy (OA/Kappa) as its primary weight. It now uses RegEx to extract the exact F1-Score of the specific class of interest, preventing the "background" accuracy from masking the final score.
+
+Dynamic HTML Parsing: The Master Dashboard engine has been rewritten to extract data (Global Metrics, Recall, Precision, and F1 per class) directly from the source code of any Baru Validator report, whether it's legacy HTML or enveloped in JSON.
+
+🐛 Bug Fixes
+Individual HTML Export Fix: Resolved a critical bug where metrics (Kappa, F1-Score, OA) appeared as 0.0000 in individual reports due to an internal dictionary misalignment (results['metrics']).
+
+Zero Division Handling: Fixed the Recall and Precision calculations when the algorithm fails to detect any correct sample of the target class (i.e., 100% false negatives), preventing the plugin from crashing.
+
+Dashboard Variables Fix: Corrected a naming mismatch (acc_html vs acc_path) that prevented the generation of the Consolidated Master Dashboard (V12).
+
+Strict indentation alignment (IndentationError) fixed in core class imports to ensure full compatibility with QGIS >= 3.0.0.
+
+💡 Tip for users: After updating, we highly recommend running the new "Hybrid Evaluation (Geo-Score)" module on your old Random Forest, Extra Trees, or CatBoost tests. Baru Validator 2.0.0 will surprise you by showing how models with a 100% statistical F1-Score can completely fail in the real world!
