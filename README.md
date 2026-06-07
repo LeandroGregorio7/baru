@@ -1,4 +1,4 @@
-# B.A.R.U (Batch Accuracy and Reporting Utility) - QGIS Plugin for ML Model Validation 1.2.0 Version ✔️
+# B.A.R.U (Batch Accuracy and Reporting Utility) - QGIS Plugin for ML Model Validation 2.0.0 Version ✔️
 
  **BARU Validator** is a high-performance QGIS plugin designed to automate the validation of image classifications. While it was originally developed for identifying *Dipteryx alata* (Baru) trees in the Brazilian Cerrado, its flexible architecture allows it to be used for any thematic classification project.
 
