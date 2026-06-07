@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 Report Generator Module
-Generate individual validation reports and the Master Dashboard V10
+Generate individual validation reports and the Master Dashboard V12
 """
 
 import os
@@ -43,18 +43,27 @@ class ReportGenerator:
     def _generate_html(self, file_path, results, include_confusion=True):
         """Builds the Individual Report (Enhanced & Professional) with JSON metadata"""
         
+        # AQUI ESTÁ A MÁGICA QUE FALTAVA:
+        # Se os resultados vierem envelopados na chave 'metrics' (código novo), extrai de lá!
+        metrics = results.get('metrics', results) if isinstance(results, dict) else results
+        
         metrics_dict = {
-            "oa": self._safe_float(results.get('overall_accuracy', 0)),
-            "kappa": self._safe_float(results.get('kappa', 0)),
-            "qadi": self._safe_float(results.get('qadi', 0)),
-            "mcc": self._safe_float(results.get('mcc', 0)),
+            "oa": self._safe_float(metrics.get('overall_accuracy', 0)),
+            "kappa": self._safe_float(metrics.get('kappa', 0)),
+            "qadi": self._safe_float(metrics.get('qadi', 0)),
+            "mcc": self._safe_float(metrics.get('mcc', 0)),
             "classes": {}
         }
-        for cls in results.get('f1_scores', {}).keys():
+        
+        f1_dict = metrics.get('f1_scores', {})
+        pa_dict = metrics.get('producer_accuracy', {})
+        ua_dict = metrics.get('user_accuracy', {})
+        
+        for cls in sorted(f1_dict.keys()):
             metrics_dict["classes"][str(cls)] = {
-                "f1": self._safe_float(results['f1_scores'].get(cls, 0)),
-                "pa": self._safe_float(results['producer_accuracy'].get(cls, 0)),
-                "ua": self._safe_float(results['user_accuracy'].get(cls, 0))
+                "f1": self._safe_float(f1_dict.get(cls, 0)),
+                "pa": self._safe_float(pa_dict.get(cls, 0)),
+                "ua": self._safe_float(ua_dict.get(cls, 0))
             }
         
         json_data = json.dumps(metrics_dict)
@@ -116,10 +125,10 @@ class ReportGenerator:
         html_parts.append("            <thead><tr><th>Classe</th><th>F1-Score</th><th>Recall (Produtor)</th><th>Precision (Usuário)</th></tr></thead>")
         html_parts.append("            <tbody>")
         
-        for cls in sorted(results.get('f1_scores', {}).keys()):
-            f1 = self._safe_float(results['f1_scores'].get(cls, 0))
-            pa = self._safe_float(results['producer_accuracy'].get(cls, 0))
-            ua = self._safe_float(results['user_accuracy'].get(cls, 0))
+        for cls in sorted(f1_dict.keys()):
+            f1 = self._safe_float(f1_dict.get(cls, 0))
+            pa = self._safe_float(pa_dict.get(cls, 0))
+            ua = self._safe_float(ua_dict.get(cls, 0))
             
             if str(cls) == "1":
                 label = "<span class='highlight'>Baru (1)</span>"
@@ -149,21 +158,23 @@ class ReportGenerator:
 
     def export_csv(self, file_path, results):
         """Export results to CSV"""
+        metrics = results.get('metrics', results) if isinstance(results.get('metrics'), dict) else results
         if not file_path.lower().endswith('.csv'):
             file_path = str(file_path) + ".csv"
         with open(file_path, 'w', newline='', encoding='utf-8') as f:
             writer = csv.writer(f)
             writer.writerow(['Metrica', 'Valor'])
-            writer.writerow(['Overall Accuracy', results.get('overall_accuracy', 0)])
-            writer.writerow(['Kappa', results.get('kappa', 0)])
-            writer.writerow(['QADI', results.get('qadi', 0)])
-            writer.writerow(['MCC', results.get('mcc', 0)])
+            writer.writerow(['Overall Accuracy', metrics.get('overall_accuracy', 0)])
+            writer.writerow(['Kappa', metrics.get('kappa', 0)])
+            writer.writerow(['QADI', metrics.get('qadi', 0)])
+            writer.writerow(['MCC', metrics.get('mcc', 0)])
             writer.writerow([])
             writer.writerow(['Classe', 'F1-Score', 'Producer Accuracy', 'User Accuracy'])
-            for cls in sorted(results.get('f1_scores', {}).keys()):
-                writer.writerow([cls, results['f1_scores'].get(cls, 0), results['producer_accuracy'].get(cls, 0), results['user_accuracy'].get(cls, 0)])
+            f1_d = metrics.get('f1_scores', {})
+            for cls in sorted(f1_d.keys()):
+                writer.writerow([cls, f1_d.get(cls, 0), metrics.get('producer_accuracy', {}).get(cls, 0), metrics.get('user_accuracy', {}).get(cls, 0)])
 
- # =====================================================================
+    # =====================================================================
     # MÓDULO CONSOLIDADOR (Dashboard Master V12)
     # =====================================================================
     def generate_master_dashboard(self, file_path, models_data):
@@ -241,14 +252,6 @@ class ReportGenerator:
             elif 'diagonal' in table.lower() or 'referência' in table.lower():
                 res['cm_html'] = f'<table class="confusion-matrix">{table}</table>'
 
-        if res['oa'] == '0.0000' and res['cm_html']:
-            try:
-                nums = [int(n) for n in re.findall(r'<td[^>]*>(\d+)</td>', res['cm_html'])]
-                diagonal = re.findall(r"class=['\"]diagonal['\"][^>]*>(\d+)</td>", res['cm_html'])
-                if diagonal and nums:
-                    correct, total = sum([int(d) for d in diagonal]), sum(nums)
-                    if total > 0: res['oa'] = f"{(correct/total):.4f}"
-            except: pass
         return res
 
     def _parse_shap_html(self, path):
@@ -294,17 +297,11 @@ class ReportGenerator:
         html_parts.append("</select></div><button class='btn-export' onclick='exportPDF()'>Exportar PDF</button></div>")
         
         html_parts.append("<div id='report-content' class='container'><header style='text-align:center; margin-bottom:40px;'><h1>Relatório Consolidado e Ranking de Modelos</h1><p style='color:#666'>Gerado em " + self.timestamp + "</p></header>")
-        
         html_parts.append("<h2>1. Conclusão Analítica Automática</h2><div class='conclusion-box' id='conclusionBox'>Processando conclusão...</div>")
-        
         html_parts.append("<h2>2. Ranking Geral de Performance</h2><div id='rankingSection'></div>")
-        
         html_parts.append("<h2>3. Comparativo Estatístico Global</h2><table id='globalTable'><thead><tr><th>Modelo</th><th>OA</th><th>Kappa</th><th>QADI</th><th>MCC</th></tr></thead><tbody id='globalBody'></tbody></table>")
-        
         html_parts.append("<h2 id='classTitle'>4. Desempenho por Classe</h2><table id='classTable'><thead><tr><th>Modelo</th><th>F1-Score</th><th>Recall</th><th>Precision</th></tr></thead><tbody id='classBody'></tbody></table>")
-        
         html_parts.append("<div style='margin: 40px 0;'><canvas id='metricsChart' height='100'></canvas></div>")
-        
         html_parts.append("<h2>5. Detalhes Espaciais e Espectrais (SHAP)</h2><div class='grid-2' id='detailsGrid'></div></div>")
         
         html_parts.append(f"<script>const models = {models_json}; let chart = null;")
@@ -314,7 +311,6 @@ class ReportGenerator:
             const isBaru = (cls === '1');
             document.getElementById('classTitle').innerText = `4. Desempenho Específico (Classe: ${isBaru ? 'Baru' : cls})`;
             
-            // 1. Sort Models by Global (OA) and Class (F1)
             const sortedGlobal = [...models].sort((a, b) => parseFloat(b.oa) - parseFloat(a.oa));
             const sortedClass = [...models].sort((a, b) => {
                 const f1A = parseFloat((a.classes[cls] || {f1:0}).f1);
@@ -322,16 +318,13 @@ class ReportGenerator:
                 return f1B - f1A;
             });
             
-            // 2. Build Global Table
             document.getElementById('globalBody').innerHTML = sortedGlobal.map(m => `<tr><td style='text-align:left; font-weight:bold;'>${m.name}</td><td>${m.oa}</td><td>${m.kappa}</td><td>${m.qadi}</td><td>${m.mcc}</td></tr>`).join('');
             
-            // 3. Build Class Table
             document.getElementById('classBody').innerHTML = sortedClass.map(m => {
                 const mc = m.classes[cls] || {f1:'0.0000', pa:'0.0000', ua:'0.0000'};
                 return `<tr><td style='text-align:left; font-weight:bold;'>${m.name}</td><td class='highlight'>${mc.f1}</td><td>${mc.pa}</td><td>${mc.ua}</td></tr>`;
             }).join('');
             
-            // 4. Build Ranking Section
             const bestGlobal = sortedGlobal[0];
             const bestClass = sortedClass[0];
             document.getElementById('rankingSection').innerHTML = `
@@ -349,7 +342,6 @@ class ReportGenerator:
                 </div>
             `;
             
-            // 5. Build Conclusion
             const topModel = bestClass;
             const mcTop = topModel.classes[cls] || {f1:'0.0000'};
             const bands = topModel.top_band || 'N/A';
@@ -361,7 +353,6 @@ class ReportGenerator:
             `;
             document.getElementById('conclusionBox').innerHTML = conclusion;
             
-            // 6. Charts and Details
             const labels = models.map(m => m.name);
             const oaData = models.map(m => parseFloat(m.oa));
             const f1Data = models.map(m => parseFloat((m.classes[cls] || {f1:0}).f1));
